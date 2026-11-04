@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dépendances
+        run: sudo apt-get update -q && sudo apt-get install -y libpam0g-dev clang
+      - name: Compilation
+        run: make -j"$(nproc)" CXX=${{ matrix.compiler }} all
+      - name: Tests
+        run: make CXX=${{ matrix.compiler }} test
+
+  coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dépendances
+        run: sudo apt-get update -q && sudo apt-get install -y libpam0g-dev
+      - uses: astral-sh/setup-uv@v5
+      - name: Couverture (80 % minimum)
+        run: make -j"$(nproc)" CXX=g++ coverage
