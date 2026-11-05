@@ -108,7 +108,7 @@ def make_pam_dir(root):
     with open(script, "w") as f:
         f.write(f"#!/bin/bash\nIFS= read -r -d '' p\n[ \"$p\" = '{PASSWORD}' ]\n")
     os.chmod(script, 0o755)
-    with open(os.path.join(root, "vlock"), "w") as f:
+    with open(os.path.join(root, "vkeep"), "w") as f:
         # pam_exec signale un échec comme une erreur système : pam_deny en fait un vrai refus.
         f.write(f"auth [success=1 default=ignore] pam_exec.so quiet expose_authtok {script}\n"
                 "auth requisite pam_deny.so\nauth required pam_permit.so\n")
@@ -124,7 +124,7 @@ def make_pam_dir(root):
                         ("broken", f"auth required pam_exec.so quiet expose_authtok {script}\n"),
                         ("silent", "auth required pam_deny.so\n")):
         os.mkdir(os.path.join(root, name))
-        with open(os.path.join(root, name, "vlock"), "w") as f:
+        with open(os.path.join(root, name, "vkeep"), "w") as f:
             f.write(stack)
 
 

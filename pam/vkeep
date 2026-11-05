@@ -1,0 +1,4 @@
+#%PAM-1.0
+# Pas de system-auth : pam_faillock y bloquerait le compte après quelques mauvais mots de passe,
+# et n'importe qui passant devant l'écran verrouillé pourrait le déclencher.
+auth required pam_unix.so

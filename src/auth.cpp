@@ -11,8 +11,8 @@
 
 namespace {
 
-// Le service installé par le paquet kbd avec le vlock d'origine.
-constexpr const char* SERVICE_NAME = "vlock";
+// Installé par make install, depuis pam/vkeep.
+constexpr const char* SERVICE_NAME = "vkeep";
 
 #ifdef VKEEP_TESTING
 const char* test_pam_dir() {

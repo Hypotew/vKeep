@@ -1,6 +1,7 @@
 CXX      ?= g++
 PREFIX   ?= /usr/local
 BINDIR   ?= $(PREFIX)/bin
+PAMDIR   ?= /etc/pam.d
 
 CXXFLAGS ?= -O2
 CXXFLAGS += -std=c++20 -Wall -Wextra -Wpedantic -MMD -MP \
@@ -55,9 +56,10 @@ vm-test: build/vkeep
 
 install: build/vkeep
 	install -Dm755 build/vkeep $(DESTDIR)$(BINDIR)/vkeep
+	install -Dm644 pam/vkeep $(DESTDIR)$(PAMDIR)/vkeep
 
 uninstall:
-	rm -f $(DESTDIR)$(BINDIR)/vkeep
+	rm -f $(DESTDIR)$(BINDIR)/vkeep $(DESTDIR)$(PAMDIR)/vkeep
 
 clean:
 	rm -rf build

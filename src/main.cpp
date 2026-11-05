@@ -63,7 +63,7 @@ int unlock_loop(Frontend& frontend, const std::string& user, const std::string& 
 
 int run(bool all_consoles, const std::string& chosen_camera) {
     if (!pam_service_available())
-        throw std::runtime_error("service PAM « vlock » introuvable : personne ne pourrait déverrouiller");
+        throw std::runtime_error("service PAM « vkeep » introuvable, personne ne pourrait déverrouiller : lance sudo make install");
 
     const passwd& account = current_user();
     const std::string user = account.pw_name;

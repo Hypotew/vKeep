@@ -96,7 +96,7 @@ def build_initramfs(root):
     archive.file("usr/bin/vkeep", open(BINARY, "rb").read())
     archive.host_file("/usr/bin/unix_chkpwd", 0o4755)
     archive.host_file("/usr/lib/security/pam_unix.so")
-    archive.host_file("/etc/pam.d/vlock", 0o644)
+    archive.file("etc/pam.d/vkeep", open(os.path.join(HERE, "..", "pam", "vkeep"), "rb").read(), 0o644)
     archive.file("etc/nsswitch.conf", b"passwd: files\nshadow: files\ngroup: files\n", 0o644)
     archive.file("etc/passwd", f"root:x:0:0::/:/x\n{USER}:x:1000:1000::/:/x\n".encode(), 0o644)
     archive.file("etc/group", f"root:x:0:\n{USER}:x:1000:\n".encode(), 0o644)

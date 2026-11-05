@@ -20,14 +20,15 @@ ton compte doit pouvoir lire la caméra. Sans cela, le verrou marche quand même
 Photographier quelqu'un à son insu peut être illégal : préviens les personnes concernées, ou
 n'utilise pas `-a` ailleurs que chez toi.
 
-Il réutilise le service PAM `/etc/pam.d/vlock` installé par le paquet `kbd`. Il ne demande
-aucun droit particulier : pas de setuid, et `pam_unix` passe par `unix_chkpwd`.
+Il vérifie le mot de passe via son propre service PAM, `/etc/pam.d/vkeep`, et tourne sans droit
+particulier : pas de setuid, et `pam_unix` passe par `unix_chkpwd`. Sans ce fichier, personne ne
+pourrait déverrouiller : vKeep refuse donc de se lancer tant qu'il n'est pas installé.
 
 ## Compilation et installation
 
 ```sh
 make
-sudo make install     # installe /usr/local/bin/vkeep
+sudo make install     # installe /usr/local/bin/vkeep et /etc/pam.d/vkeep
 sudo make uninstall
 ```
 
