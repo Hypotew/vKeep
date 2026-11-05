@@ -9,11 +9,13 @@
 namespace {
 
 volatile sig_atomic_t guarded_fd = -1;
+volatile sig_atomic_t switch_attempted = 0;
 
 // En mode VT_PROCESS, le noyau nous demande l'accord avant chaque changement de console.
 void refuse_release(int) {
     const int saved_errno = errno;
     ioctl(guarded_fd, VT_RELDISP, 0);
+    switch_attempted = 1;
     errno = saved_errno;
 }
 
@@ -33,6 +35,12 @@ void install_handler(int signum, void (*handler)(int)) {
 }
 
 } // namespace
+
+bool consume_console_switch_attempt() {
+    const bool attempted = switch_attempted != 0;
+    switch_attempted = 0;
+    return attempted;
+}
 
 VtGuard::VtGuard(int tty_fd) : fd_(tty_fd) {
     if (ioctl(fd_, VT_GETMODE, &saved_) != 0)

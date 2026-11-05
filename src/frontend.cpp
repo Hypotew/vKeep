@@ -10,6 +10,8 @@
 #include <pthread.h>
 #include <sys/mman.h>
 
+#include "vt_guard.hpp"
+
 namespace {
 
 constexpr const char* ENTER_SCREEN = "\033[?1049h\033[?25l";
@@ -46,7 +48,8 @@ std::string localized_prompt(const char* prompt) {
 
 } // namespace
 
-Frontend::Frontend(Tty& tty, const std::string& user, bool all_consoles) : tty_(tty) {
+Frontend::Frontend(Tty& tty, const std::string& user, bool all_consoles, AttemptLog& attempts)
+    : tty_(tty), attempts_(attempts) {
     for (const int signum : {SIGINT, SIGQUIT, SIGTSTP, SIGTTIN, SIGTTOU, SIGTERM, SIGPIPE})
         set_handler(signum, SIG_IGN);
     set_handler(SIGHUP, on_hangup);
@@ -112,6 +115,15 @@ void Frontend::draw() {
     last_rows_ = std::move(rows);
     if (!tty_.write_all(output))
         hangup_requested = 1;
+}
+
+void Frontend::watch_attempts() {
+    attempts_.poll();
+    if (consume_console_switch_attempt()) {
+        attempts_.record(Attempt::ConsoleSwitch);
+        state_.status_kind = StatusKind::Error;
+        state_.status = "Changement de console refusé";
+    }
 }
 
 void Frontend::start_spinner() {
@@ -216,6 +228,7 @@ char* Frontend::ask(const char* prompt, bool echo) {
     for (;;) {
         if (hung_up())
             return nullptr;
+        watch_attempts();
         draw();
 
         std::size_t count = 0;
@@ -272,6 +285,7 @@ void Frontend::begin_attempt() {
 void Frontend::report_wrong_password() {
     stop_spinner();
     ++failures_;
+    attempts_.record(Attempt::WrongPassword);
     state_.checking = false;
     state_.status_kind = StatusKind::Error;
     state_.status = failures_ == 1
@@ -306,6 +320,7 @@ void Frontend::pause(int milliseconds) {
             deadline - std::chrono::steady_clock::now());
         if (left.count() <= 0 || hung_up())
             break;
+        watch_attempts();
         draw();
 
         std::size_t count = 0;

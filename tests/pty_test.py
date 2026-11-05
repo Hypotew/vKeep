@@ -132,13 +132,128 @@ def main():
     with tempfile.TemporaryDirectory() as root:
         make_pam_dir(root)
         env = {"VKEEP_TEST_PAM_DIR": root, "PATH": os.environ["PATH"], "TERM": "xterm-256color",
-               "LANG": "C.UTF-8", "TZ": "UTC"}
+               "LANG": "C.UTF-8", "TZ": "UTC", "XDG_STATE_HOME": os.path.join(root, "state")}
         run_tests(env, root)
     print(f"\n{len(failures)} échec(s)" if failures else "\nTous les tests passent")
     sys.exit(1 if failures else 0)
 
 
+def make_fake_ffmpeg(root, name, body):
+    """Un faux ffmpeg dans son dossier : les tests n'ouvrent jamais la vraie webcam."""
+    directory = os.path.join(root, name)
+    os.mkdir(directory)
+    path = os.path.join(directory, "ffmpeg")
+    with open(path, "w") as f:
+        f.write(f"#!/bin/bash\n{body}\n")
+    os.chmod(path, 0o755)
+    return directory
+
+
+def run_photo_tests(env, root):
+    state = os.path.join(root, "photo-state")
+    calls = os.path.join(root, "ffmpeg-calls")
+    working = make_fake_ffmpeg(root, "ffmpeg-ok", f'printf "%s\\n" "$*" >> {calls}\necho image > "${{@: -1}}"')
+    env = dict(env, XDG_STATE_HOME=state, PATH=f"{working}:{env['PATH']}")
+    journal = os.path.join(state, "vkeep", "attempts.log")
+
+    # Deux échecs rapprochés : deux lignes au journal, mais une seule photo
+    s = Session(dict(env, VKEEP_TEST_CAMERA="/dev/videoTEST"))
+    s.read(0.3)
+    s.send("faux\r")
+    s.read(0.3)
+    s.send("faux2\r")
+    s.read(0.3)
+    check("photographie une tentative", os.path.exists(calls))
+    args = open(calls).read() if os.path.exists(calls) else ""
+    check("utilise la caméra demandée", "/dev/videoTEST" in args, args)
+    check("une seule photo pour deux échecs rapprochés", args.count("\n") == 1, args)
+    check("n'attend pas la caméra pour redemander", s.alive())
+    s.send(PASSWORD + "\r")
+    code = s.wait(6.0)
+    check("déverrouille avec une photo prise", code == 0, f"code={code}")
+    text = s.output.decode(errors="replace")
+    check("résume les tentatives au déverrouillage", "2 tentatives" in text and ".jpg" in text, text[-300:])
+    check("le mot de passe n'apparaît pas dans le résumé", PASSWORD not in text and "faux" not in text)
+    s.stop()
+    lines = open(journal).read().splitlines() if os.path.exists(journal) else []
+    check("note les tentatives au journal", len(lines) == 2 and all("wrong-password" in l for l in lines), str(lines))
+    check("le journal ne contient pas les saisies", not any("faux" in l for l in lines), str(lines))
+    check("le journal explique une photo manquante", len(lines) == 2 and "no-photo:too-soon" in lines[1], str(lines))
+    photos = [f for f in os.listdir(os.path.dirname(journal)) if f.endswith(".jpg")]
+    check("range la photo avec le journal", len(photos) == 1, str(photos))
+    mode = os.stat(os.path.dirname(journal)).st_mode & 0o777
+    check("dossier accessible au seul propriétaire", mode == 0o700, oct(mode))
+
+    # Sans -a : le journal, mais pas de caméra
+    os.remove(calls)
+    s = Session(env)
+    s.read(0.3)
+    s.send("faux\r")
+    s.read(0.2)
+    s.send(PASSWORD + "\r")
+    code = s.wait()
+    check("sans -a, aucune photo", code == 0 and not os.path.exists(calls), f"code={code}")
+    check("sans -a, le résumé reste", b"1 tentative" in s.output)
+    check("sans -a, le journal le dit", "no-photo:not-requested" in open(journal).read().splitlines()[-1])
+    s.stop()
+
+    # ffmpeg absent : le verrou fonctionne et le dit
+    empty = os.path.join(root, "no-ffmpeg")
+    os.mkdir(empty)
+    s = Session(dict(env, PATH=empty, VKEEP_TEST_CAMERA="/dev/videoTEST"))
+    s.read(0.3)
+    s.send("faux\r")
+    s.read(0.2)
+    s.send(PASSWORD + "\r")
+    code = s.wait()
+    check("sans ffmpeg, le verrou marche", code == 0, f"code={code}")
+    check("sans ffmpeg, le résumé l'indique", "pas de photo".encode() in s.output, repr(s.output[-200:]))
+    check("sans ffmpeg, le journal donne l'erreur", "no-photo:spawn-failed" in open(journal).read().splitlines()[-1],
+          open(journal).read()[-200:])
+    s.stop()
+
+    # Détection automatique : la vraie webcam si la machine en a une, jamais ouverte par le faux ffmpeg
+    s = Session(dict(env, VKEEP_TEST_CAMERA="auto"))
+    s.read(0.3)
+    s.send("faux\r")
+    s.read(0.3)
+    s.send(PASSWORD + "\r")
+    code = s.wait()
+    last = open(journal).read().splitlines()[-1]
+    check("détection : le verrou marche, avec ou sans caméra", code == 0, f"code={code}")
+    check("détection : photo, ou absence de caméra expliquée", last.endswith(".jpg") or "no-photo:no-camera" in last, last)
+    s.stop()
+
+    # ffmpeg qui échoue : pas de photo annoncée à tort
+    failing = make_fake_ffmpeg(root, "ffmpeg-fail", 'echo "caméra occupée" >&2\nexit 1')
+    s = Session(dict(env, PATH=f"{failing}:{env['PATH']}", VKEEP_TEST_CAMERA="/dev/videoTEST"))
+    s.read(0.3)
+    s.send("faux\r")
+    s.read(0.3)
+    s.send(PASSWORD + "\r")
+    code = s.wait()
+    check("caméra en panne : le verrou marche et ne promet pas de photo",
+          code == 0 and "pas de photo".encode() in s.output, f"code={code}")
+    s.stop()
+    errors = os.path.join(os.path.dirname(journal), "ffmpeg-errors.log")
+    check("garde les erreurs de ffmpeg", os.path.exists(errors) and "caméra occupée" in open(errors).read())
+
+    # ffmpeg bloqué : il ne doit pas retenir le déverrouillage indéfiniment
+    stuck = make_fake_ffmpeg(root, "ffmpeg-stuck", "trap '' TERM\nsleep 60")
+    s = Session(dict(env, PATH=f"{stuck}:{env['PATH']}", VKEEP_TEST_CAMERA="/dev/videoTEST"))
+    s.read(0.3)
+    s.send("faux\r")
+    s.read(0.2)
+    start = time.monotonic()
+    s.send(PASSWORD + "\r")
+    code = s.wait(7.0)
+    elapsed = time.monotonic() - start
+    check("caméra bloquée : déverrouille quand même, avec un délai borné", code == 0 and elapsed < 6.5, f"code={code} {elapsed:.1f}s")
+    s.stop()
+
+
 def run_tests(env, root):
+    run_photo_tests(env, root)
     # Écran et mauvais mot de passe
     s = Session(env)
     screen = s.read(0.5).decode(errors="replace")
@@ -312,6 +427,12 @@ def run_tests(env, root):
           f"code={code} {s.output!r}")
     s.stop()
 
+    s = Session(env, args=("--camera=/dev/video0",))
+    check("--camera sans -a est refusé", s.wait() == 2 and b"1049h" not in s.output)
+    s.stop()
+    s = Session(env, args=("-p",))
+    check("l'ancienne option -p n'existe plus", s.wait() == 2)
+    s.stop()
     s = Session(env, args=("--inconnu",))
     check("rejette une option inconnue", s.wait() == 2)
     s.stop()

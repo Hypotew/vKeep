@@ -5,8 +5,20 @@ cadre et indicateur d'attente.
 
 ```
 vkeep       verrouille la console courante
-vkeep -a    verrouille toutes les consoles virtuelles
+vkeep -a    verrouille toutes les consoles virtuelles et photographie chaque tentative
 ```
+
+Un mauvais mot de passe ou, avec `-a`, un changement de console refusé compte comme une tentative.
+Les tentatives sont listées au déverrouillage et notées dans `~/.local/state/vkeep/attempts.log`.
+
+Avec `-a`, chaque tentative est aussi photographiée par la webcam, détectée au lancement. Si la
+détection se trompe, par exemple sur une caméra infrarouge, choisis-la avec `--camera=/dev/videoN`.
+Les photos sont rangées au même endroit, dans un dossier accessible à toi seul. Il faut `ffmpeg`, et
+ton compte doit pouvoir lire la caméra. Sans cela, le verrou marche quand même, sans photo. Sans
+`-a`, la caméra n'est jamais utilisée.
+
+Photographier quelqu'un à son insu peut être illégal : préviens les personnes concernées, ou
+n'utilise pas `-a` ailleurs que chez toi.
 
 Il réutilise le service PAM `/etc/pam.d/vlock` installé par le paquet `kbd`. Il ne demande
 aucun droit particulier : pas de setuid, et `pam_unix` passe par `unix_chkpwd`.

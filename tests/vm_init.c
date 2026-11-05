@@ -27,11 +27,13 @@ static pid_t start_lock(const char* args) {
     dprintf(1, "\033[2J\033[HCONTENU-AVANT-LE-VERROU\n");
     setgid(1000);
     setuid(1000);
-    char* const env[] = {"TERM=linux", "PATH=/usr/bin", "TZ=UTC", NULL};
-    if (args[0] != '\0')
-        execle("/usr/bin/vkeep", "vkeep", args, NULL, env);
-    else
-        execle("/usr/bin/vkeep", "vkeep", NULL, env);
+    char* const env[] = {"TERM=linux", "PATH=/usr/bin", "TZ=UTC", "XDG_STATE_HOME=/tmp/state", NULL};
+    // Arguments séparés par des virgules : la ligne de commande du noyau n'en passe qu'un.
+    char* argv[8] = {"vkeep"};
+    int argc = 1;
+    for (char* arg = strtok(strdup(args), ","); arg != NULL && argc < 7; arg = strtok(NULL, ","))
+        argv[argc++] = arg;
+    execve("/usr/bin/vkeep", argv, env);
     _exit(127);
 }
 
@@ -39,6 +41,9 @@ int main(void) {
     mount("proc", "/proc", "proc", 0, NULL);
     mount("sysfs", "/sys", "sysfs", 0, NULL);
     mount("devtmpfs", "/dev", "devtmpfs", 0, NULL);
+
+    mkdir("/tmp/state", 0755);
+    chown("/tmp/state", 1000, 1000);
 
     int serial = open("/dev/ttyS0", O_RDWR | O_NOCTTY | O_NONBLOCK);
     struct termios raw;
@@ -81,7 +86,15 @@ int main(void) {
         if (read(serial, &command, 1) == 1) {
             if (command == 'K' && child > 0)
                 kill(child, SIGKILL);
-            else if (command == 'C')
+            else if (command == 'L') {
+                char line[512];
+                int log = open("/tmp/state/vkeep/attempts.log", O_RDONLY);
+                ssize_t size = log >= 0 ? read(log, line, sizeof line - 1) : 0;
+                line[size > 0 ? size : 0] = '\0';
+                dprintf(serial, "\nVM: log<<%s>>\n", line);
+                if (log >= 0)
+                    close(log);
+            } else if (command == 'C')
                 dprintf(serial, "\nVM: chvt=%d\n", ioctl(console, VT_ACTIVATE, 2));
         }
         usleep(50000);

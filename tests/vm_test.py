@@ -87,6 +87,12 @@ def build_initramfs(root):
     archive.symlink("usr/sbin", "bin")
     archive.symlink("usr/lib64", "lib")
     archive.file("init", open(init, "rb").read())
+    # Faux ffmpeg : le test porte sur le déclenchement, et la VM n'a pas de caméra.
+    fake = os.path.join(root, "ffmpeg")
+    subprocess.run(["gcc", "-static", "-O1", "-x", "c", "-o", fake, "-"], check=True, text=True,
+                   input='#include <stdio.h>\nint main(int c, char** v) { FILE* f = fopen(v[c - 1], "w"); '
+                         'if (f) fputs("image", f); return f == NULL; }\n')
+    archive.file("usr/bin/ffmpeg", open(fake, "rb").read())
     archive.file("usr/bin/vkeep", open(BINARY, "rb").read())
     archive.host_file("/usr/bin/unix_chkpwd", 0o4755)
     archive.host_file("/usr/lib/security/pam_unix.so")
@@ -200,6 +206,8 @@ def scenario_all(root, initramfs):
         vm.pump(3)
         vm.shot("all-wrong-password")
         check("-a : un mauvais mot de passe ne déverrouille pas", "VM: exit" not in vm.log)
+        vm.serial(b"L")
+        check("-a : sans webcam, le verrou tient et le note", "no-photo:no-camera" in vm.log, vm.log[-300:])
         check("-a : Alt-F2 toujours refusé après un échec", vm.switch(2) == "tty1")
         vm.type("presque")
         vm.pump(3)
@@ -224,8 +232,29 @@ def scenario_current(root, initramfs):
         check("classique : Alt-F2 reste permis", vm.switch(2) == "tty2")
         check("classique : retour sur tty1", vm.switch(1) == "tty1")
         check("classique : toujours verrouillé au retour", "VM: exit" not in vm.log)
+        vm.type("mauvais")
+        vm.pump(3)
+        vm.serial(b"L")
+        check("classique : la caméra n'est pas utilisée", "wrong-password no-photo:not-requested" in vm.log, vm.log[-300:])
         vm.type(PASSWORD)
         check("classique : déverrouille", vm.wait_for("VM: exit=0", 8), vm.log[-300:])
+    finally:
+        vm.close()
+
+
+def scenario_photo(root, initramfs):
+    vm = Vm(root, initramfs, "-a,--camera=/dev/video0")
+    try:
+        check("photo : Alt-F2 refusé", vm.switch(2) == "tty1")
+        vm.pump(0.5)
+        vm.shot("photo-console-switch")
+        vm.serial(b"L")
+        check("photo : le changement de console est noté avec sa photo",
+              re.search(r"console-switch /tmp/state/vkeep/\S+\.jpg", vm.log) is not None, vm.log[-300:])
+        vm.type(PASSWORD)
+        check("photo : déverrouille", vm.wait_for("VM: exit=0", 8), vm.log[-300:])
+        vm.pump(0.5)
+        vm.shot("photo-summary")
     finally:
         vm.close()
 
@@ -248,6 +277,7 @@ def main():
         initramfs = build_initramfs(root)
         scenario_all(root, initramfs)
         scenario_current(root, initramfs)
+        scenario_photo(root, initramfs)
         scenario_killed(root, initramfs)
     print(f"\n{len(failures)} échec(s)" if failures else "\nTous les tests passent")
     print(f"Captures : {SCREENS}")

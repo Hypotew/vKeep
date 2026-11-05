@@ -6,13 +6,14 @@
 #include <thread>
 #include <vector>
 
+#include "attempts.hpp"
 #include "screen.hpp"
 #include "tty.hpp"
 
 // L'écran de verrouillage et sa saisie. Reste actif jusqu'à sa destruction.
 class Frontend {
 public:
-    Frontend(Tty& tty, const std::string& user, bool all_consoles);
+    Frontend(Tty& tty, const std::string& user, bool all_consoles, AttemptLog& attempts);
     ~Frontend();
     Frontend(const Frontend&) = delete;
     Frontend& operator=(const Frontend&) = delete;
@@ -35,6 +36,7 @@ private:
     enum class Parser { Normal, Escape, Csi, ConsoleFunctionKey, Ss3 };
 
     void draw();
+    void watch_attempts();
     void start_spinner();
     void stop_spinner();
     void clear_secret();
@@ -42,6 +44,7 @@ private:
     void sync_field();
 
     Tty& tty_;
+    AttemptLog& attempts_;
     ScreenState state_;
     std::vector<std::string> last_rows_;
     TtySize last_size_{};
