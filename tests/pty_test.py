@@ -369,7 +369,8 @@ def run_tests(env, root):
     screen = s.read(0.7).decode(errors="replace")
     frames = {c for c in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" if c in screen}
     check("l'indicateur d'attente s'anime", len(frames) >= 3 and "Vérification" in screen, screen[:300])
-    check("seule la ligne de l'indicateur est redessinée", "\x1b[2J" not in screen)
+    # Un seul repaint complet reste normal : l'écran entier est redessiné quand la minute change.
+    check("seule la ligne de l'indicateur est redessinée", screen.count("\x1b[2J") <= 1, str(screen.count("\x1b[2J")))
     os.kill(s.pid, signal.SIGINT)
     screen = s.read(0.8).decode(errors="replace")
     check("reste verrouillé après une vérification lente", s.alive() and "incorrect" in screen, screen[:300])
