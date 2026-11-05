@@ -1,61 +1,83 @@
 # vKeep
 
-Un verrou de console pour Linux, dans la lignée de `vlock` : logo en dégradé, grande horloge,
-cadre et indicateur d'attente.
+[![CI](https://github.com/Hypotew/vKeep/actions/workflows/ci.yml/badge.svg)](https://github.com/Hypotew/vKeep/actions/workflows/ci.yml)
+[![Licence : MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 
-```
-vkeep       verrouille la console courante
-vkeep -a    verrouille toutes les consoles virtuelles et photographie chaque tentative
-```
+**Le verrou de console Linux qui vous dit qui a essayé d'entrer.**
 
-Un mauvais mot de passe ou, avec `-a`, un changement de console refusé compte comme une tentative.
-Les tentatives sont listées au déverrouillage et notées dans `~/.local/state/vkeep/attempts.log`.
+vKeep protège vos consoles le temps de votre absence. Dans la lignée de `vlock`, il reste simple à
+utiliser, avec un écran soigné en plus. Et si quelqu'un tente sa chance, il le note et prend sa photo.
 
-Avec `-a`, chaque tentative est aussi photographiée par la webcam, détectée au lancement. Si la
-détection se trompe, par exemple sur une caméra infrarouge, choisis-la avec `--camera=/dev/videoN`.
-Les photos sont rangées au même endroit, dans un dossier accessible à toi seul. Il faut `ffmpeg`, et
-ton compte doit pouvoir lire la caméra. Sans cela, le verrou marche quand même, sans photo. Sans
-`-a`, la caméra n'est jamais utilisée.
+![L'écran de verrouillage de vKeep](docs/screenshot.png)
 
-Photographier quelqu'un à son insu peut être illégal : préviens les personnes concernées, ou
-n'utilise pas `-a` ailleurs que chez toi.
+## Fonctionnalités
 
-Il vérifie le mot de passe via son propre service PAM, `/etc/pam.d/vkeep`, et tourne sans droit
-particulier : pas de setuid, et `pam_unix` passe par `unix_chkpwd`. Sans ce fichier, personne ne
-pourrait déverrouiller : vKeep refuse donc de se lancer tant qu'il n'est pas installé.
+- **Toutes vos consoles protégées** : avec `-a`, impossible de passer sur une autre console virtuelle.
+- **Photo des tentatives** : avec `-a`, chaque mauvais mot de passe et chaque changement de console
+  refusé déclenche une photo, sur une webcam détectée automatiquement.
+- **Bilan au retour** : dès le déverrouillage, vous voyez ce qui s'est passé pendant votre absence.
+- **Un écran agréable à regarder** : logo en dégradé, grande horloge, et un affichage qui s'adapte à la
+  console comme aux terminaux graphiques.
+- **Aucun droit particulier** : vKeep tourne avec votre compte et vérifie le mot de passe via PAM,
+  le système d'authentification standard de Linux.
+- **Un verrou qui ne dépend pas de la caméra** : webcam absente ou en panne, il reste actif et
+  se déverrouille normalement.
 
-## Compilation et installation
+## Installation
+
+Il vous faut Linux, un compilateur C++20 et les en-têtes de PAM (`libpam0g-dev` sur Debian et Ubuntu,
+déjà inclus dans le paquet `pam` sur Arch). `ffmpeg` est facultatif : il sert uniquement aux photos.
 
 ```sh
+git clone https://github.com/Hypotew/vKeep.git
+cd vKeep
 make
-sudo make install     # installe /usr/local/bin/vkeep et /etc/pam.d/vkeep
-sudo make uninstall
+sudo make install
 ```
 
-## Tests
+`sudo make uninstall` retire vKeep de la machine.
+
+## Utilisation
+
+| Commande | Effet |
+|---|---|
+| `vkeep` | Verrouille la console courante |
+| `vkeep -a` | Verrouille toutes les consoles virtuelles et photographie les tentatives |
+| `vkeep -a --camera=/dev/video2` | Pareil, avec la webcam de votre choix |
+
+Pour déverrouiller, saisissez le mot de passe de votre compte. `vkeep -a` doit être lancé depuis une
+console virtuelle (`Ctrl-Alt-F3`, par exemple), pas depuis un terminal graphique.
+
+## Vos données
+
+Les photos et le journal `attempts.log` restent sur votre machine, dans `~/.local/state/vkeep/`, un
+dossier accessible à vous seul. vKeep ne les envoie nulle part et ne les supprime jamais : à vous de
+faire le tri.
+
+Photographier une personne à son insu peut être illégal. Prévenez les personnes concernées, et
+renseignez-vous sur les règles en vigueur avant d'utiliser `-a` ailleurs que chez vous.
+
+## Ce que vKeep ne protège pas
+
+Comme tout verrou logiciel, vKeep a ses limites :
+
+- **La session graphique** : vKeep protège les consoles. Dans un terminal graphique, seule cette
+  fenêtre est verrouillée, et le reste de votre bureau reste accessible.
+- **L'accès physique** : quelqu'un devant la machine peut toujours l'éteindre ou la redémarrer.
+  Ça n'ouvre pas votre session, mais le travail non enregistré est perdu, sans photo ni trace.
+- **Les raccourcis du noyau** : selon votre configuration, `Ctrl-Alt-Suppr` peut redémarrer la machine,
+  et `SysRq` peut arrêter vKeep. Pour un verrou plus solide, gardez `SysRq` limité (`kernel.sysrq=16`)
+  et désactivez le raccourci avec `sudo systemctl mask ctrl-alt-del.target`.
+- **Votre propre compte** : un programme lancé sous votre compte, par exemple via SSH, peut arrêter vKeep.
+
+## Développement
 
 ```sh
-make test       # pseudo-terminal, avec une pile PAM de test
-make coverage   # les mêmes tests, avec échec sous 80 % de lignes couvertes
-make vm-test    # vraies consoles dans une VM QEMU, avec le vrai pam_unix
+make test       # tests dans un pseudo-terminal
+make coverage   # les mêmes, avec échec sous 80 % de lignes couvertes (nécessite uv)
+make vm-test    # vraies consoles dans une VM QEMU
 ```
-
-`make coverage` utilise `gcovr`, lancé par `uv`. La CI lance `make test` et `make coverage`. `make vm-test` reste à lancer en local : il dépend du
-noyau et de l'installation PAM de la machine, et c'est le seul à exécuter `src/vt_guard.cpp`.
-
-`make vm-test` a besoin de QEMU et d'un noyau lisible dans `/boot/vmlinuz-linux`. Les captures
-d'écran arrivent dans `build/vm-screens/`.
-
-## Limites
-
-Comme `vlock` :
-
-- SysRq et Ctrl-Alt-Suppr restent actifs, y compris avec `-a`.
-- Sans `-a`, les autres consoles restent accessibles.
-- Si le processus meurt (par exemple `kill -9` par le même utilisateur), le shell reprend la main.
-  Sur console, les couleurs du verrou restent alors en place jusqu'à un `printf '\033]R'`.
-- Dans un émulateur de terminal, seul ce terminal est verrouillé, et `-a` est refusé.
 
 ## Licence
 
-vKeep est distribué sous licence MIT : voir [LICENSE](LICENSE).
+Distribué sous licence [MIT](LICENSE).
