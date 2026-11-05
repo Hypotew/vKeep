@@ -20,12 +20,16 @@
 namespace {
 
 constexpr int RETRY_PAUSE_MS = 2000;
+#ifndef VKEEP_VERSION
+#define VKEEP_VERSION "dev"
+#endif
 
 void print_usage(std::ostream& out, const char* program) {
     out << "Utilisation : " << program << " [options]\n"
         << "Verrouille la console jusqu'à la saisie du mot de passe.\n\n"
         << "  -a, --all         verrouille toutes les consoles virtuelles et photographie chaque tentative\n"
         << "      --camera=DEV  webcam à utiliser avec -a (détectée automatiquement sinon)\n"
+        << "  -v, --version     affiche la version\n"
         << "  -h, --help        affiche cette aide\n";
 }
 
@@ -108,6 +112,7 @@ int main(int argc, char** argv) {
     static const option options[] = {
         {"all", no_argument, nullptr, 'a'},
         {"camera", required_argument, nullptr, 'c'},
+        {"version", no_argument, nullptr, 'v'},
         {"help", no_argument, nullptr, 'h'},
         {nullptr, 0, nullptr, 0},
     };
@@ -115,7 +120,7 @@ int main(int argc, char** argv) {
     bool all_consoles = false;
     std::string camera;
     int choice = 0;
-    while ((choice = getopt_long(argc, argv, "ah", options, nullptr)) != -1) {
+    while ((choice = getopt_long(argc, argv, "ahv", options, nullptr)) != -1) {
         switch (choice) {
         case 'a':
             all_consoles = true;
@@ -123,6 +128,9 @@ int main(int argc, char** argv) {
         case 'c':
             camera = optarg;
             break;
+        case 'v':
+            std::cout << "vKeep " << VKEEP_VERSION << '\n';
+            return 0;
         case 'h':
             print_usage(std::cout, argv[0]);
             return 0;

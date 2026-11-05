@@ -1,0 +1,24 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dépendances
+        run: sudo apt-get update -q && sudo apt-get install -y libpam0g-dev
+      - name: Archive
+        run: make -j"$(nproc)" CXX=g++ VERSION="${GITHUB_REF_NAME#v}" EXTRA_LDFLAGS="-static-libstdc++ -static-libgcc" dist
+      - name: Tests
+        run: make CXX=g++ VERSION="${GITHUB_REF_NAME#v}" test
+      - name: Publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes build/dist/*.tar.gz build/dist/*.sha256

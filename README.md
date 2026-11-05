@@ -25,17 +25,26 @@ utiliser, avec un écran soigné en plus. Et si quelqu'un tente sa chance, il le
 
 ## Installation
 
-Il vous faut Linux, un compilateur C++20 et les en-têtes de PAM (`libpam0g-dev` sur Debian et Ubuntu,
-déjà inclus dans le paquet `pam` sur Arch). `ffmpeg` est facultatif : il sert uniquement aux photos.
+Téléchargez la dernière archive depuis la page
+[Releases](https://github.com/Hypotew/vKeep/releases), puis :
+
+```sh
+tar xzf vkeep-*-linux-x86_64.tar.gz
+cd vkeep-*-linux-x86_64
+scripts/install.sh
+```
+
+Le script installe `ffmpeg` s'il manque (`--no-camera` pour s'en passer), puis `vkeep` et son fichier
+PAM. Il demande votre mot de passe au moment voulu. Pour tout retirer : `scripts/uninstall.sh`, en
+ajoutant `--purge` pour supprimer aussi vos photos et votre journal.
+
+L'archive est compilée pour Linux x86_64 récent. Si le binaire ne démarre pas sur votre système, ou
+si vous préférez compiler vous-même, installez depuis les sources :
 
 ```sh
 git clone https://github.com/Hypotew/vKeep.git
-cd vKeep
-make
-sudo make install
+vKeep/scripts/install.sh
 ```
-
-`sudo make uninstall` retire vKeep de la machine.
 
 ## Utilisation
 

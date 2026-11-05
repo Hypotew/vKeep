@@ -2,11 +2,13 @@ CXX      ?= g++
 PREFIX   ?= /usr/local
 BINDIR   ?= $(PREFIX)/bin
 PAMDIR   ?= /etc/pam.d
+VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 CXXFLAGS ?= -O2
 CXXFLAGS += -std=c++20 -Wall -Wextra -Wpedantic -MMD -MP \
-            -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=3 -pthread
-LDFLAGS  += -pthread -pie -Wl,-z,relro,-z,now
+            -fPIE -fstack-protector-strong -D_FORTIFY_SOURCE=3 -pthread \
+            -DVKEEP_VERSION='"$(VERSION)"'
+LDFLAGS  += -pthread -pie -Wl,-z,relro,-z,now $(EXTRA_LDFLAGS)
 LDLIBS   += -lpam
 
 SRCS := $(wildcard src/*.cpp)
@@ -50,6 +52,7 @@ coverage: build/vkeep_coverage
 
 test: build/vkeep_test
 	python3 tests/pty_test.py build/vkeep_test
+	python3 tests/scripts_test.py
 
 vm-test: build/vkeep
 	python3 tests/vm_test.py build/vkeep
@@ -61,9 +64,21 @@ install: build/vkeep
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/vkeep $(DESTDIR)$(PAMDIR)/vkeep
 
+# Archive de release : le binaire et de quoi l'installer, avec les mêmes chemins que le dépôt.
+DIST_NAME = vkeep-$(VERSION)-linux-$(shell uname -m)
+dist: build/vkeep
+	rm -rf build/dist
+	mkdir -p build/dist/$(DIST_NAME)/build build/dist/$(DIST_NAME)/scripts
+	install -m755 build/vkeep build/dist/$(DIST_NAME)/build/vkeep
+	strip build/dist/$(DIST_NAME)/build/vkeep
+	cp -r pam README.md LICENSE build/dist/$(DIST_NAME)/
+	cp -r scripts/install.sh scripts/uninstall.sh scripts/lib build/dist/$(DIST_NAME)/scripts/
+	tar -C build/dist -czf build/dist/$(DIST_NAME).tar.gz $(DIST_NAME)
+	cd build/dist && sha256sum $(DIST_NAME).tar.gz > $(DIST_NAME).tar.gz.sha256
+
 clean:
 	rm -rf build
 
-.PHONY: all test coverage vm-test install uninstall clean
+.PHONY: all test coverage vm-test dist install uninstall clean
 
 -include $(OBJS:.o=.d) $(TEST_OBJS:.o=.d) $(COVERAGE_OBJS:.o=.d)
