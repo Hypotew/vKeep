@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.png" alt="Logo de vKeep : un cadenas dont le corps est une horloge" width="128"></p>
+
 # vKeep
 
 [![CI](https://github.com/Hypotew/vKeep/actions/workflows/ci.yml/badge.svg)](https://github.com/Hypotew/vKeep/actions/workflows/ci.yml)
