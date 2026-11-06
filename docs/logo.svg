@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>vKeep</title>
+  <defs>
+    <!-- Le dégradé du logo de l'écran de verrouillage : bleu, violet, corail. -->
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2f6fd1"/>
+      <stop offset="0.55" stop-color="#8a63e6"/>
+      <stop offset="1" stop-color="#e5534b"/>
+    </linearGradient>
+    <!-- L'horloge est découpée dans le cadenas : on y voit le dégradé du fond. -->
+    <mask id="clock">
+      <rect width="512" height="512" fill="#fff"/>
+      <circle cx="256" cy="312" r="58" fill="none" stroke="#000" stroke-width="12"/>
+      <path d="M256 312 V274 M256 312 L284 328" fill="none" stroke="#000" stroke-width="12" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <rect width="512" height="512" fill="url(#brand)"/>
+  <g mask="url(#clock)">
+    <path d="M192 236 V196 A64 64 0 0 1 320 196 V236" fill="none" stroke="#fff" stroke-width="36" stroke-linecap="round"/>
+    <rect x="136" y="220" width="240" height="184" rx="44" fill="#fff"/>
+  </g>
+</svg>
