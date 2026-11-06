@@ -304,7 +304,12 @@ def sent_messages(calls, timeout=2.0):
                 photo = value[len('files[0]=@"'):value.rindex('";type=')]
             elif key == "url":
                 url = value
-        messages.append({"args": args, "content": payload["content"] if payload else "", "photo": photo, "url": url})
+        embed = payload["embeds"][0] if payload and payload.get("embeds") else {}
+        fields = {f["name"]: f["value"] for f in embed.get("fields", [])}
+        # Tout le texte visible, pour chercher dedans d'un coup.
+        text = "\n".join([payload["content"] if payload else "", embed.get("title", ""), embed.get("description", "")]
+                         + [f"{k}: {v}" for k, v in fields.items()])
+        messages.append({"args": args, "content": text, "embed": embed, "fields": fields, "photo": photo, "url": url})
     return messages
 
 
@@ -342,12 +347,20 @@ def run_notify_tests(env, root):
     messages = sent_messages(calls)
     contents = [m["content"] for m in messages]
     check("alertes : trois messages", len(messages) == 3, str(contents))
-    check("alerte au verrouillage", any("verrouillé par" in c for c in contents), str(contents))
-    attempt = [m for m in messages if "mauvais mot de passe" in m["content"]]
+    check("alerte au verrouillage", any("Session verrouillée" in c and "Compte: " in c for c in contents), str(contents))
+    attempt = [m for m in messages if "Mauvais mot de passe" in m["content"]]
     check("alerte de tentative avec la photo", len(attempt) == 1 and attempt[0]["photo"] is not None
           and attempt[0]["photo"].endswith(".jpg") and os.path.exists(attempt[0]["photo"]), str(messages))
+    check("la photo s'affiche dans l'embed", len(attempt) == 1 and attempt[0]["photo"] is not None
+          and attempt[0]["embed"].get("image", {}).get("url") == "attachment://" + os.path.basename(attempt[0]["photo"]),
+          str(attempt))
+    check("embed complet : couleur, heure et pied", all(
+        isinstance(m["embed"].get("color"), int) and m["embed"].get("timestamp", "").endswith("Z")
+        and m["embed"].get("footer", {}).get("text", "").startswith("vKeep ") for m in messages), str(messages))
+    check("la tentative est numérotée", len(attempt) == 1 and attempt[0]["fields"].get("Tentative") == "n° 1", str(attempt))
     check("alerte au déverrouillage avec le bilan",
-          any("déverrouillé après" in c and "1 tentative" in c for c in contents), str(contents))
+          any("Session déverrouillée" in m["content"] and m["fields"].get("Tentatives") == "1" and "Durée" in m["fields"]
+              for m in messages), str(contents))
     check("envoie au webhook configuré", all(m["url"] == WEBHOOK for m in messages), str(messages))
     check("le webhook n'est pas sur la ligne de commande",
           all(m["args"] == "ARGS -q --config -" for m in messages), str([m["args"] for m in messages]))
@@ -363,9 +376,9 @@ def run_notify_tests(env, root):
     s.send(PASSWORD + "\r")
     s.wait()
     s.stop()
-    attempt = [m for m in sent_messages(calls) if "mauvais mot de passe" in m["content"]]
+    attempt = [m for m in sent_messages(calls) if "Mauvais mot de passe" in m["content"]]
     check("caméra en panne : alerte sans photo", len(attempt) == 1 and attempt[0]["photo"] is None
-          and "photo impossible" in attempt[0]["content"], str(attempt))
+          and attempt[0]["fields"].get("Photo") == "impossible" and "image" not in attempt[0]["embed"], str(attempt))
     clear(calls)
 
     # Pas de caméra du tout, et alerte immédiate sans attendre de photo
@@ -375,7 +388,7 @@ def run_notify_tests(env, root):
     s.send(PASSWORD + "\r")
     s.wait()
     s.stop()
-    attempt = [m for m in sent_messages(calls) if "mauvais mot de passe" in m["content"]]
+    attempt = [m for m in sent_messages(calls) if "Mauvais mot de passe" in m["content"]]
     check("détection : une alerte par tentative", len(attempt) == 1, str(attempt))
     clear(calls)
 
@@ -433,7 +446,7 @@ def run_notify_tests(env, root):
     code = s.wait()
     s.stop()
     messages = sent_messages(calls)
-    check("--test-notify envoie un message", code == 0 and len(messages) == 1 and "test" in messages[0]["content"]
+    check("--test-notify envoie un message", code == 0 and len(messages) == 1 and "Test des alertes" in messages[0]["content"]
           and messages[0]["url"] == WEBHOOK and b"1049h" not in s.output, f"code={code} {messages}")
     clear(calls)
     s = Session(dict(env, FAKE_CURL_EXIT="22"), args=("--test-notify",))

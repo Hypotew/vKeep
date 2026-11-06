@@ -25,6 +25,9 @@ namespace {
 
 constexpr int MAX_ALERTS_PER_LOCK = 30; // Discord limite les webhooks, et un insistant ne doit pas noyer le salon
 constexpr std::size_t MAX_RUNNING = 8;
+#ifndef VKEEP_VERSION
+#define VKEEP_VERSION "dev"
+#endif
 
 std::string trim(const std::string& text) {
     const auto first = text.find_first_not_of(" \t\r");
@@ -69,6 +72,38 @@ std::string quoted(const std::string& text) {
         out += c;
     }
     return out + '"';
+}
+
+std::string utc_timestamp() {
+    const std::time_t timestamp = std::time(nullptr);
+    std::tm now{};
+    gmtime_r(&timestamp, &now);
+    std::array<char, 32> buffer{};
+    std::strftime(buffer.data(), buffer.size(), "%Y-%m-%dT%H:%M:%SZ", &now);
+    return buffer.data();
+}
+
+// Le message au format de l'API Discord ; l'heure de l'embed s'affiche dans le fuseau du téléphone.
+std::string payload_json(const Alert& alert) {
+    std::string embed = "{\"title\":" + json_string(alert.title) + ",\"color\":" + std::to_string(alert.color);
+    if (!alert.description.empty())
+        embed += ",\"description\":" + json_string(alert.description);
+    if (!alert.fields.empty()) {
+        embed += ",\"fields\":[";
+        for (std::size_t i = 0; i < alert.fields.size(); ++i) {
+            embed += (i > 0 ? ",{\"name\":" : "{\"name\":") + json_string(alert.fields[i].first) +
+                     ",\"value\":" + json_string(alert.fields[i].second) + ",\"inline\":true}";
+        }
+        embed += "]";
+    }
+    if (!alert.photo.empty()) {
+        const std::string name = alert.photo.substr(alert.photo.find_last_of('/') + 1);
+        embed += ",\"image\":{\"url\":" + json_string("attachment://" + name) + "}";
+    }
+    embed += ",\"footer\":{\"text\":" + json_string(std::string("vKeep ") + VKEEP_VERSION) + "}";
+    embed += ",\"timestamp\":" + json_string(utc_timestamp()) + "}";
+    return "{\"content\":" + json_string(alert.headline) + ",\"username\":\"vKeep\",\"embeds\":[" + embed +
+           "],\"allowed_mentions\":{\"parse\":[]}}";
 }
 
 std::string local_host() {
@@ -123,7 +158,7 @@ NotifyConfig load_notify_config(const std::string& home) {
 Notifier::Notifier(std::string webhook, std::string error_log)
     : webhook_(std::move(webhook)), error_log_(std::move(error_log)), host_(local_host()) {}
 
-void Notifier::send(const std::string& text, const std::string& photo, bool essential) {
+void Notifier::send(const Alert& alert, bool essential) {
     if (!enabled())
         return;
     try {
@@ -132,7 +167,13 @@ void Notifier::send(const std::string& text, const std::string& photo, bool esse
             if (sent_ >= MAX_ALERTS_PER_LOCK) {
                 if (!suspended_) {
                     suspended_ = true;
-                    const pid_t pid = spawn("⏸️ **" + host_ + "** : trop de tentatives, alertes suspendues jusqu'au déverrouillage", "", false);
+                    Alert pause;
+                    pause.headline = "⏸️ Alertes suspendues sur **" + host_ + "**";
+                    pause.title = "⏸️ Alertes suspendues";
+                    pause.description = "Trop de tentatives : plus d'alerte jusqu'au déverrouillage, qui sera signalé avec le bilan.";
+                    pause.color = alert_color::AMBER;
+                    pause.fields = {{"Machine", host_}};
+                    const pid_t pid = spawn(pause, false);
                     if (pid > 0)
                         running_.push_back(pid);
                 }
@@ -144,7 +185,7 @@ void Notifier::send(const std::string& text, const std::string& photo, bool esse
             }
             ++sent_;
         }
-        if (const pid_t pid = spawn(text, photo, false); pid > 0)
+        if (const pid_t pid = spawn(alert, false); pid > 0)
             running_.push_back(pid);
     } catch (const std::exception&) {
         // Une alerte perdue vaut mieux qu'un verrou qui s'arrête.
@@ -163,8 +204,8 @@ void Notifier::poll() {
     });
 }
 
-int Notifier::send_and_wait(const std::string& text) {
-    const pid_t pid = spawn(text, "", true);
+int Notifier::send_and_wait(const Alert& alert) {
+    const pid_t pid = spawn(alert, true);
     if (pid <= 0)
         return -1;
     int status = 0;
@@ -173,16 +214,14 @@ int Notifier::send_and_wait(const std::string& text) {
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
-pid_t Notifier::spawn(const std::string& text, const std::string& photo, bool to_terminal) {
+pid_t Notifier::spawn(const Alert& alert, bool to_terminal) {
     // L'adresse du webhook est un secret : elle passe par un tube, jamais par la ligne de commande
     // que tout le monde peut lire dans ps.
     std::string config = "silent\nshow-error\nfail\nmax-time = 20\nretry = 3\nretry-max-time = 90\noutput = /dev/null\n";
     config += "url = " + quoted(webhook_) + "\n";
-    const std::string payload = "{\"content\":" + json_string(text) +
-                                ",\"username\":\"vKeep\",\"allowed_mentions\":{\"parse\":[]}}";
-    config += "form-string = " + quoted("payload_json=" + payload) + "\n";
-    if (!photo.empty())
-        config += "form = " + quoted("files[0]=@" + quoted(photo) + ";type=image/jpeg") + "\n";
+    config += "form-string = " + quoted("payload_json=" + payload_json(alert)) + "\n";
+    if (!alert.photo.empty())
+        config += "form = " + quoted("files[0]=@" + quoted(alert.photo) + ";type=image/jpeg") + "\n";
 
     int pipe_fds[2];
     if (pipe2(pipe_fds, O_CLOEXEC) != 0)

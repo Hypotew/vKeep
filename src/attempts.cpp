@@ -119,14 +119,19 @@ void AttemptLog::record(Attempt attempt) {
         journal << format_now("%Y-%m-%dT%H:%M:%S%z") << ' ' << attempt_key(attempt);
         journal << ' ' << (photo.empty() ? "no-photo:" + problem : photo) << '\n';
 
-        std::string alert = "⚠️ **" + notifier_.host() + "** : " + attempt_label(attempt) + " à " + entries_.back().time;
+        Alert alert;
+        const std::string title = attempt == Attempt::WrongPassword ? "Mauvais mot de passe" : "Changement de console refusé";
+        alert.headline = "⚠️ " + title + " sur **" + notifier_.host() + "**";
+        alert.title = "⚠️ " + title;
+        alert.color = alert_color::CORAL;
+        alert.fields = {{"Machine", notifier_.host()}, {"Tentative", "n° " + std::to_string(entries_.size())}};
         if (!photo.empty()) {
-            pending_alert_ = std::move(alert); // part avec la photo, une fois prise
-            pending_photo_ = photo;
+            alert.photo = photo; // part avec la photo, une fois prise
+            pending_alert_ = std::move(alert);
         } else {
             // Trop tôt ou capture en cours : la photo précédente montre déjà la personne.
             if (photos_wanted_ && problem != "too-soon" && problem != "capture-running")
-                alert += " (pas de photo)";
+                alert.fields.emplace_back("Photo", problem == "no-camera" ? "aucune caméra" : "impossible");
             notifier_.send(alert);
         }
     } catch (const std::exception&) {
@@ -195,13 +200,17 @@ void AttemptLog::stop_capture() {
 }
 
 void AttemptLog::capture_done(bool succeeded) {
-    if (pending_alert_.empty())
+    if (!pending_alert_)
         return;
+    Alert alert = std::move(*pending_alert_);
+    pending_alert_.reset();
     std::error_code error;
-    const bool usable = succeeded && std::filesystem::file_size(pending_photo_, error) > 0 && !error;
-    notifier_.send(usable ? pending_alert_ : pending_alert_ + " (photo impossible)", usable ? pending_photo_ : "");
-    pending_alert_.clear();
-    pending_photo_.clear();
+    const bool usable = succeeded && std::filesystem::file_size(alert.photo, error) > 0 && !error;
+    if (!usable) {
+        alert.photo.clear();
+        alert.fields.emplace_back("Photo", "impossible");
+    }
+    notifier_.send(alert);
 }
 
 std::string AttemptLog::summary() const {

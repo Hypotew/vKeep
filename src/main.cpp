@@ -55,9 +55,7 @@ std::string duration_text(std::chrono::steady_clock::duration elapsed) {
 }
 
 std::string attempts_text(std::size_t count) {
-    if (count == 0)
-        return "aucune tentative";
-    return std::to_string(count) + (count == 1 ? " tentative" : " tentatives");
+    return count == 0 ? "aucune" : std::to_string(count);
 }
 
 NotifyConfig read_config(const std::string& home) {
@@ -75,7 +73,13 @@ int test_notify() {
         return 1;
     }
     Notifier notifier(config.webhook, "/dev/null");
-    const int code = notifier.send_and_wait("🔔 **" + notifier.host() + "** : test des alertes vKeep, tout fonctionne");
+    Alert alert;
+    alert.headline = "🔔 Test des alertes depuis **" + notifier.host() + "**";
+    alert.title = "🔔 Test des alertes";
+    alert.description = "Tout fonctionne : les alertes de cette machine arriveront dans ce salon.";
+    alert.color = alert_color::VIOLET;
+    alert.fields = {{"Machine", notifier.host()}};
+    const int code = notifier.send_and_wait(alert);
     if (code == 0) {
         std::cout << "Message envoyé : il doit être arrivé sur ton salon Discord.\n";
         return 0;
@@ -142,9 +146,15 @@ int run(bool all_consoles, const std::string& chosen_camera) {
     Notifier notifier(config.webhook, state_directory(home) + "/notify-errors.log");
     AttemptLog attempts(home, photos_wanted, camera, notifier);
     const auto locked_at = std::chrono::steady_clock::now();
-    const std::string host = "**" + notifier.host() + "**";
-    notifier.send("🔒 " + host + " verrouillé par " + user + " (" + (all_consoles ? "toutes les consoles" : tty.path()) + ")",
-                  "", true);
+    const std::string& host = notifier.host();
+    const std::string scope = all_consoles ? "toutes les consoles"
+                              : tty.path().starts_with("/dev/") ? tty.path().substr(5) : tty.path();
+    Alert locked;
+    locked.headline = "🔒 **" + host + "** est verrouillé";
+    locked.title = "🔒 Session verrouillée";
+    locked.color = alert_color::BLUE;
+    locked.fields = {{"Machine", host}, {"Compte", user}, {"Consoles", scope}};
+    notifier.send(locked, true);
     int status = 1;
     {
         Frontend frontend(tty, user, all_consoles, attempts);
@@ -152,10 +162,19 @@ int run(bool all_consoles, const std::string& chosen_camera) {
     }
     attempts.finish();
     const std::string elapsed = duration_text(std::chrono::steady_clock::now() - locked_at);
-    if (status == 0)
-        notifier.send("🔓 " + host + " déverrouillé après " + elapsed + " · " + attempts_text(attempts.count()), "", true);
-    else
-        notifier.send("❔ " + host + " : verrou arrêté sans mot de passe, le terminal a été fermé (après " + elapsed + ")", "", true);
+    Alert ended;
+    ended.fields = {{"Machine", host}, {"Durée", elapsed}, {"Tentatives", attempts_text(attempts.count())}};
+    if (status == 0) {
+        ended.headline = "🔓 **" + host + "** est déverrouillé";
+        ended.title = "🔓 Session déverrouillée";
+        ended.color = alert_color::GREEN;
+    } else {
+        ended.headline = "❔ Verrou de **" + host + "** interrompu";
+        ended.title = "❔ Verrou interrompu";
+        ended.description = "Le terminal a été fermé sans que le mot de passe soit saisi.";
+        ended.color = alert_color::AMBER;
+    }
+    notifier.send(ended, true);
     notifier.poll();
     if (status == 0)
         tty.write_all(attempts.summary());

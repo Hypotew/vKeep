@@ -7,7 +7,7 @@
 
 #include <sys/types.h>
 
-class Notifier;
+#include "notify.hpp"
 
 enum class Attempt { WrongPassword, ConsoleSwitch };
 
@@ -47,8 +47,7 @@ private:
     bool photos_wanted_;
     std::string camera_; // vide si aucune caméra n'a été trouvée
     Notifier& notifier_;
-    std::string pending_alert_; // alerte de la capture en cours
-    std::string pending_photo_;
+    std::optional<Alert> pending_alert_; // alerte de la capture en cours
     std::vector<Entry> entries_;
     pid_t capture_ = -1;
     Clock::time_point capture_started_{};
