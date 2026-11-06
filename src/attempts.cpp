@@ -12,6 +12,8 @@
 #include <fstream>
 #include <thread>
 
+#include "notify.hpp"
+
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -28,13 +30,6 @@ constexpr auto FINISH_TIMEOUT = std::chrono::seconds(4);
 constexpr auto FINISH_POLL = std::chrono::milliseconds(50);
 constexpr int MAX_PHOTOS_PER_LOCK = 50; // borne l'espace disque si quelqu'un insiste
 constexpr std::size_t MAX_SUMMARY_LINES = 5;
-
-std::string state_directory(const std::string& home) {
-    const char* state = std::getenv("XDG_STATE_HOME");
-    if (state != nullptr && state[0] == '/')
-        return std::string(state) + "/vkeep";
-    return home + "/.local/state/vkeep";
-}
 
 std::string format_now(const char* format) {
     const std::time_t timestamp = std::time(nullptr);
@@ -85,8 +80,16 @@ int spawn_ffmpeg(const std::string& camera, const std::string& output, const std
 
 } // namespace
 
-AttemptLog::AttemptLog(const std::string& home, bool photos_wanted, std::string camera)
-    : directory_(state_directory(home)), photos_wanted_(photos_wanted), camera_(std::move(camera)) {
+std::string state_directory(const std::string& home) {
+    const char* state = std::getenv("XDG_STATE_HOME");
+    if (state != nullptr && state[0] == '/')
+        return std::string(state) + "/vkeep";
+    return home + "/.local/state/vkeep";
+}
+
+AttemptLog::AttemptLog(const std::string& home, bool photos_wanted, std::string camera, Notifier& notifier)
+    : directory_(state_directory(home)), photos_wanted_(photos_wanted), camera_(std::move(camera)),
+      notifier_(notifier) {
     std::error_code error;
     std::filesystem::create_directories(directory_, error);
     std::filesystem::permissions(directory_, std::filesystem::perms::owner_all, error);
@@ -115,6 +118,17 @@ void AttemptLog::record(Attempt attempt) {
         std::ofstream journal(directory_ + "/attempts.log", std::ios::app);
         journal << format_now("%Y-%m-%dT%H:%M:%S%z") << ' ' << attempt_key(attempt);
         journal << ' ' << (photo.empty() ? "no-photo:" + problem : photo) << '\n';
+
+        std::string alert = "⚠️ **" + notifier_.host() + "** : " + attempt_label(attempt) + " à " + entries_.back().time;
+        if (!photo.empty()) {
+            pending_alert_ = std::move(alert); // part avec la photo, une fois prise
+            pending_photo_ = photo;
+        } else {
+            // Trop tôt ou capture en cours : la photo précédente montre déjà la personne.
+            if (photos_wanted_ && problem != "too-soon" && problem != "capture-running")
+                alert += " (pas de photo)";
+            notifier_.send(alert);
+        }
     } catch (const std::exception&) {
         // Une tentative non notée vaut mieux qu'un verrou qui s'arrête.
     }
@@ -152,10 +166,14 @@ void AttemptLog::poll() {
     if (capture_ == -1)
         return;
     // Jamais waitpid(-1) : PAM attend ses propres processus.
-    if (waitpid(capture_, nullptr, WNOHANG) == capture_)
+    int status = 0;
+    if (waitpid(capture_, &status, WNOHANG) == capture_) {
         capture_ = -1;
-    else if (Clock::now() - capture_started_ > CAPTURE_TIMEOUT)
+        capture_done(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    } else if (Clock::now() - capture_started_ > CAPTURE_TIMEOUT) {
         stop_capture();
+    }
+    notifier_.poll();
 }
 
 void AttemptLog::finish() {
@@ -173,6 +191,17 @@ void AttemptLog::stop_capture() {
     kill(capture_, SIGKILL);
     waitpid(capture_, nullptr, 0);
     capture_ = -1;
+    capture_done(false);
+}
+
+void AttemptLog::capture_done(bool succeeded) {
+    if (pending_alert_.empty())
+        return;
+    std::error_code error;
+    const bool usable = succeeded && std::filesystem::file_size(pending_photo_, error) > 0 && !error;
+    notifier_.send(usable ? pending_alert_ : pending_alert_ + " (photo impossible)", usable ? pending_photo_ : "");
+    pending_alert_.clear();
+    pending_photo_.clear();
 }
 
 std::string AttemptLog::summary() const {

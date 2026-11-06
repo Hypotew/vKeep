@@ -1,3 +1,5 @@
+#include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -14,6 +16,7 @@
 #include "auth.hpp"
 #include "camera.hpp"
 #include "frontend.hpp"
+#include "notify.hpp"
 #include "tty.hpp"
 #include "vt_guard.hpp"
 
@@ -29,6 +32,7 @@ void print_usage(std::ostream& out, const char* program) {
         << "Verrouille la console jusqu'à la saisie du mot de passe.\n\n"
         << "  -a, --all         verrouille toutes les consoles virtuelles et photographie chaque tentative\n"
         << "      --camera=DEV  webcam à utiliser avec -a (détectée automatiquement sinon)\n"
+        << "      --test-notify envoie un message de test sur le webhook Discord configuré\n"
         << "  -v, --version     affiche la version\n"
         << "  -h, --help        affiche cette aide\n";
 }
@@ -38,6 +42,46 @@ const passwd& current_user() {
     if (entry == nullptr)
         throw std::runtime_error("utilisateur courant inconnu");
     return *entry;
+}
+
+std::string duration_text(std::chrono::steady_clock::duration elapsed) {
+    const auto minutes = std::chrono::duration_cast<std::chrono::minutes>(elapsed).count();
+    if (minutes < 1)
+        return "moins d'une minute";
+    if (minutes < 60)
+        return std::to_string(minutes) + " min";
+    const auto rest = minutes % 60;
+    return std::to_string(minutes / 60) + " h " + (rest < 10 ? "0" : "") + std::to_string(rest);
+}
+
+std::string attempts_text(std::size_t count) {
+    if (count == 0)
+        return "aucune tentative";
+    return std::to_string(count) + (count == 1 ? " tentative" : " tentatives");
+}
+
+NotifyConfig read_config(const std::string& home) {
+    NotifyConfig config = load_notify_config(home);
+    for (const std::string& warning : config.warnings)
+        std::cerr << "vkeep : " << warning << '\n';
+    return config;
+}
+
+int test_notify() {
+    const NotifyConfig config = read_config(current_user().pw_dir);
+    if (config.webhook.empty()) {
+        std::cerr << "vkeep : aucun webhook configuré. Ajoute cette ligne dans " << config.path << " :\n"
+                  << "  discord_webhook = https://discord.com/api/webhooks/...\n";
+        return 1;
+    }
+    Notifier notifier(config.webhook, "/dev/null");
+    const int code = notifier.send_and_wait("🔔 **" + notifier.host() + "** : test des alertes vKeep, tout fonctionne");
+    if (code == 0) {
+        std::cout << "Message envoyé : il doit être arrivé sur ton salon Discord.\n";
+        return 0;
+    }
+    std::cerr << "vkeep : échec de l'envoi" << (code == -1 ? " (curl est-il installé ?)" : " (curl : code " + std::to_string(code) + ")") << '\n';
+    return 1;
 }
 
 int unlock_loop(Frontend& frontend, const std::string& user, const std::string& tty) {
@@ -72,6 +116,7 @@ int run(bool all_consoles, const std::string& chosen_camera) {
     const passwd& account = current_user();
     const std::string user = account.pw_name;
     const std::string home = account.pw_dir;
+    const NotifyConfig config = read_config(home);
     Tty tty;
     if (all_consoles && !tty.is_virtual_console())
         throw std::runtime_error(tty.path() + " n'est pas une console virtuelle : -a ne peut pas tout verrouiller");
@@ -94,13 +139,24 @@ int run(bool all_consoles, const std::string& chosen_camera) {
 #endif
     if (photos_wanted && camera.empty())
         camera = find_camera();
-    AttemptLog attempts(home, photos_wanted, camera);
+    Notifier notifier(config.webhook, state_directory(home) + "/notify-errors.log");
+    AttemptLog attempts(home, photos_wanted, camera, notifier);
+    const auto locked_at = std::chrono::steady_clock::now();
+    const std::string host = "**" + notifier.host() + "**";
+    notifier.send("🔒 " + host + " verrouillé par " + user + " (" + (all_consoles ? "toutes les consoles" : tty.path()) + ")",
+                  "", true);
     int status = 1;
     {
         Frontend frontend(tty, user, all_consoles, attempts);
         status = unlock_loop(frontend, user, tty.path());
     }
     attempts.finish();
+    const std::string elapsed = duration_text(std::chrono::steady_clock::now() - locked_at);
+    if (status == 0)
+        notifier.send("🔓 " + host + " déverrouillé après " + elapsed + " · " + attempts_text(attempts.count()), "", true);
+    else
+        notifier.send("❔ " + host + " : verrou arrêté sans mot de passe, le terminal a été fermé (après " + elapsed + ")", "", true);
+    notifier.poll();
     if (status == 0)
         tty.write_all(attempts.summary());
     return status;
@@ -109,15 +165,20 @@ int run(bool all_consoles, const std::string& chosen_camera) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // Dès le départ, avant le verrou : écrire à un curl déjà sorti doit donner une erreur, pas tuer vkeep.
+    std::signal(SIGPIPE, SIG_IGN);
+
     static const option options[] = {
         {"all", no_argument, nullptr, 'a'},
         {"camera", required_argument, nullptr, 'c'},
+        {"test-notify", no_argument, nullptr, 'n'},
         {"version", no_argument, nullptr, 'v'},
         {"help", no_argument, nullptr, 'h'},
         {nullptr, 0, nullptr, 0},
     };
 
     bool all_consoles = false;
+    bool notify_test = false;
     std::string camera;
     int choice = 0;
     while ((choice = getopt_long(argc, argv, "ahv", options, nullptr)) != -1) {
@@ -127,6 +188,9 @@ int main(int argc, char** argv) {
             break;
         case 'c':
             camera = optarg;
+            break;
+        case 'n':
+            notify_test = true;
             break;
         case 'v':
             std::cout << "vKeep " << VKEEP_VERSION << '\n';
@@ -144,7 +208,14 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    if (notify_test && (all_consoles || !camera.empty())) {
+        print_usage(std::cerr, argv[0]);
+        return 2;
+    }
+
     try {
+        if (notify_test)
+            return test_notify();
         return run(all_consoles, camera);
     } catch (const std::exception& error) {
         std::cerr << argv[0] << " : " << error.what() << '\n';

@@ -147,10 +147,11 @@ if ! compgen -G "/usr/lib*/security/pam_unix.so" >/dev/null \
         && ! compgen -G "/lib/*/security/pam_unix.so" >/dev/null; then
     ui_warn "Module pam_unix introuvable : teste le déverrouillage dans un terminal avant de t'en servir."
 fi
+command -v curl >/dev/null || ui_warn "curl absent : les alertes Discord ne pourront pas partir."
 [[ -z $DESTDIR ]] && ! command -v vkeep >/dev/null && ui_warn "$PREFIX/bin n'est pas dans ton PATH."
 
 # --- récapitulatif ------------------------------------------------------------------------
-LINES_OUT=("${GREEN}✔${R} vKeep est installé." "" "vkeep      verrouille cette console" "vkeep -a   verrouille toutes les consoles et photographie" "           les tentatives" "" "Essaie d'abord vkeep dans un terminal : au pire, ferme-le.")
+LINES_OUT=("${GREEN}✔${R} vKeep est installé." "" "vkeep      verrouille cette console" "vkeep -a   verrouille toutes les consoles et photographie" "           les tentatives" "" "Alertes Discord : voir le README, puis vkeep --test-notify" "" "Essaie d'abord vkeep dans un terminal : au pire, ferme-le.")
 for warning in "${UI_WARNINGS[@]+"${UI_WARNINGS[@]}"}"; do
     LINES_OUT+=("${YELLOW}!${R} $warning")
 done

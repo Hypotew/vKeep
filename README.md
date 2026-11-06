@@ -15,6 +15,8 @@ utiliser, avec un écran soigné en plus. Et si quelqu'un tente sa chance, il le
 - **Toutes vos consoles protégées** : avec `-a`, impossible de passer sur une autre console virtuelle.
 - **Photo des tentatives** : avec `-a`, chaque mauvais mot de passe et chaque changement de console
   refusé déclenche une photo, sur une webcam détectée automatiquement.
+- **Alertes sur votre téléphone** : verrouillage, tentatives (avec la photo) et déverrouillage
+  arrivent en direct sur un salon Discord, où que vous soyez.
 - **Bilan au retour** : dès le déverrouillage, vous voyez ce qui s'est passé pendant votre absence.
 - **Un écran agréable à regarder** : logo en dégradé, grande horloge, et un affichage qui s'adapte à la
   console comme aux terminaux graphiques.
@@ -53,15 +55,43 @@ vKeep/scripts/install.sh
 | `vkeep` | Verrouille la console courante |
 | `vkeep -a` | Verrouille toutes les consoles virtuelles et photographie les tentatives |
 | `vkeep -a --camera=/dev/video2` | Pareil, avec la webcam de votre choix |
+| `vkeep --test-notify` | Envoie un message de test sur votre salon Discord |
 
 Pour déverrouiller, saisissez le mot de passe de votre compte. `vkeep -a` doit être lancé depuis une
 console virtuelle (`Ctrl-Alt-F3`, par exemple), pas depuis un terminal graphique.
 
+## Alertes Discord
+
+vKeep peut vous prévenir sur votre téléphone, via l'application Discord :
+
+1. Créez un serveur Discord privé, avec un salon pour vKeep.
+2. Dans les paramètres du salon : **Intégrations** › **Webhooks** › **Nouveau webhook**, puis
+   **Copier l'URL du webhook**.
+3. Enregistrez-la, lisible par vous seul :
+
+   ```sh
+   mkdir -p ~/.config/vkeep
+   echo 'discord_webhook = https://discord.com/api/webhooks/…' > ~/.config/vkeep/config
+   chmod 600 ~/.config/vkeep/config
+   vkeep --test-notify
+   ```
+
+4. Pour être notifié de chaque message, réglez les notifications du salon sur **Tous les messages**.
+
+Vous recevez alors un message au verrouillage, un à chaque tentative (avec sa photo quand `-a` en
+prend une), et un au déverrouillage avec le bilan. Les envois se font en arrière-plan : sans réseau,
+le verrou fonctionne exactement pareil, et les erreurs sont notées dans `notify-errors.log`.
+
+L'URL du webhook permet à quiconque la connaît d'écrire dans votre salon : gardez-la pour vous. Si elle
+fuit, supprimez le webhook dans Discord et créez-en un autre.
+
 ## Vos données
 
 Les photos et le journal `attempts.log` restent sur votre machine, dans `~/.local/state/vkeep/`, un
-dossier accessible à vous seul. vKeep ne les envoie nulle part et ne les supprime jamais : à vous de
-faire le tri.
+dossier accessible à vous seul. vKeep ne les supprime jamais : à vous de faire le tri.
+
+Sans alertes Discord, rien ne quitte votre machine. Avec, les messages et les photos des tentatives
+sont aussi envoyés à Discord, et conservés sur ses serveurs comme tout message du salon.
 
 Photographier une personne à son insu peut être illégal. Prévenez les personnes concernées, et
 renseignez-vous sur les règles en vigueur avant d'utiliser `-a` ailleurs que chez vous.

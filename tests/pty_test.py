@@ -132,7 +132,9 @@ def main():
     with tempfile.TemporaryDirectory() as root:
         make_pam_dir(root)
         env = {"VKEEP_TEST_PAM_DIR": root, "PATH": os.environ["PATH"], "TERM": "xterm-256color",
-               "LANG": "C.UTF-8", "TZ": "UTC", "XDG_STATE_HOME": os.path.join(root, "state")}
+               "LANG": "C.UTF-8", "TZ": "UTC", "XDG_STATE_HOME": os.path.join(root, "state"),
+               # Jamais la vraie configuration : les tests posteraient sur le vrai salon.
+               "XDG_CONFIG_HOME": os.path.join(root, "no-config")}
         run_tests(env, root)
     print(f"\n{len(failures)} échec(s)" if failures else "\nTous les tests passent")
     sys.exit(1 if failures else 0)
@@ -252,8 +254,209 @@ def run_photo_tests(env, root):
     s.stop()
 
 
+WEBHOOK = "https://discord.com/api/webhooks/123/jeton-secret"
+
+
+def make_fake_curl(root, calls):
+    """Un faux curl : garde ce qu'il reçoit sur son entrée, sans jamais toucher au réseau."""
+    os.mkdir(calls)
+    directory = os.path.join(root, "curl-bin")
+    os.mkdir(directory)
+    path = os.path.join(directory, "curl")
+    with open(path, "w") as f:
+        f.write(f'#!/bin/bash\nout={calls}/$(date +%s%N)-$$\n{{ printf "ARGS %s\\n" "$*"; cat; }} > "$out.tmp"\n'
+                f'mv "$out.tmp" "$out.txt"\n'
+                '[ -n "$FAKE_CURL_EXIT" ] && { echo "curl: (22) erreur simulée" >&2; exit "$FAKE_CURL_EXIT"; }\nexit 0\n')
+    os.chmod(path, 0o755)
+    return directory
+
+
+def write_config(root, name, text, mode=0o600):
+    home = os.path.join(root, name)
+    os.makedirs(os.path.join(home, "vkeep"))
+    path = os.path.join(home, "vkeep", "config")
+    with open(path, "w") as f:
+        f.write(text)
+    os.chmod(path, mode)
+    return home
+
+
+def sent_messages(calls, timeout=2.0):
+    """Les envois reçus par le faux curl : (arguments, contenu JSON, photo jointe ou None)."""
+    import json
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        names = sorted(n for n in os.listdir(calls) if n.endswith(".txt"))
+        time.sleep(0.2)
+        if names == sorted(n for n in os.listdir(calls) if n.endswith(".txt")) and names:
+            break
+    messages = []
+    for name in sorted(n for n in os.listdir(calls) if n.endswith(".txt")):
+        lines = open(os.path.join(calls, name)).read().splitlines()
+        args, payload, photo, url = lines[0], None, None, None
+        for line in lines[1:]:
+            key, _, value = line.partition(" = ")
+            if value.startswith('"'):
+                value = value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+            if key == "form-string" and value.startswith("payload_json="):
+                payload = json.loads(value[len("payload_json="):])
+            elif key == "form" and value.startswith("files[0]=@"):
+                photo = value[len('files[0]=@"'):value.rindex('";type=')]
+            elif key == "url":
+                url = value
+        messages.append({"args": args, "content": payload["content"] if payload else "", "photo": photo, "url": url})
+    return messages
+
+
+def clear(calls):
+    for name in os.listdir(calls):
+        os.remove(os.path.join(calls, name))
+
+
+def run_notify_tests(env, root):
+    calls = os.path.join(root, "curl-calls")
+    curl_dir = make_fake_curl(root, calls)
+    camera = make_fake_ffmpeg(root, "ffmpeg-notify", 'sleep 0.3\necho image > "${@: -1}"')
+    state = os.path.join(root, "notify-state")
+    config_home = write_config(root, "config-ok", f"# alertes\ndiscord_webhook = {WEBHOOK}\n")
+    env = dict(env, PATH=f"{curl_dir}:{camera}:{env['PATH']}", XDG_STATE_HOME=state, XDG_CONFIG_HOME=config_home)
+
+    # Sans fichier de configuration : aucune alerte
+    s = Session(dict(env, XDG_CONFIG_HOME=os.path.join(root, "absent")))
+    s.read(0.3)
+    s.send("faux\r")
+    s.send(PASSWORD + "\r")
+    check("sans configuration : se déverrouille", s.wait() == 0)
+    s.stop()
+    check("sans configuration : aucune alerte", sent_messages(calls, 0.5) == [])
+
+    # Verrouillage, tentative avec photo, déverrouillage
+    s = Session(dict(env, VKEEP_TEST_CAMERA="/dev/videoTEST"))
+    s.read(0.3)
+    s.send("faux\r")
+    s.read(1.0)  # le temps de la photo
+    s.send(PASSWORD + "\r")
+    code = s.wait(6.0)
+    check("alertes : se déverrouille", code == 0, f"code={code}")
+    s.stop()
+    messages = sent_messages(calls)
+    contents = [m["content"] for m in messages]
+    check("alertes : trois messages", len(messages) == 3, str(contents))
+    check("alerte au verrouillage", any("verrouillé par" in c for c in contents), str(contents))
+    attempt = [m for m in messages if "mauvais mot de passe" in m["content"]]
+    check("alerte de tentative avec la photo", len(attempt) == 1 and attempt[0]["photo"] is not None
+          and attempt[0]["photo"].endswith(".jpg") and os.path.exists(attempt[0]["photo"]), str(messages))
+    check("alerte au déverrouillage avec le bilan",
+          any("déverrouillé après" in c and "1 tentative" in c for c in contents), str(contents))
+    check("envoie au webhook configuré", all(m["url"] == WEBHOOK for m in messages), str(messages))
+    check("le webhook n'est pas sur la ligne de commande",
+          all(m["args"] == "ARGS -q --config -" for m in messages), str([m["args"] for m in messages]))
+    check("le mot de passe ne part jamais", not any(PASSWORD in m["content"] or "faux" in m["content"] for m in messages))
+    clear(calls)
+
+    # Caméra en panne : l'alerte part quand même, sans photo
+    failing = os.path.join(root, "ffmpeg-fail")
+    s = Session(dict(env, PATH=f"{curl_dir}:{failing}:{env['PATH']}", VKEEP_TEST_CAMERA="/dev/videoTEST"))
+    s.read(0.3)
+    s.send("faux\r")
+    s.read(0.5)
+    s.send(PASSWORD + "\r")
+    s.wait()
+    s.stop()
+    attempt = [m for m in sent_messages(calls) if "mauvais mot de passe" in m["content"]]
+    check("caméra en panne : alerte sans photo", len(attempt) == 1 and attempt[0]["photo"] is None
+          and "photo impossible" in attempt[0]["content"], str(attempt))
+    clear(calls)
+
+    # Pas de caméra du tout, et alerte immédiate sans attendre de photo
+    s = Session(dict(env, VKEEP_TEST_CAMERA="auto", PATH=f"{curl_dir}:{os.environ['PATH']}"))
+    s.read(0.3)
+    s.send("faux\r")
+    s.send(PASSWORD + "\r")
+    s.wait()
+    s.stop()
+    attempt = [m for m in sent_messages(calls) if "mauvais mot de passe" in m["content"]]
+    check("détection : une alerte par tentative", len(attempt) == 1, str(attempt))
+    clear(calls)
+
+    # Terminal fermé : on le sait aussi
+    s = Session(env)
+    s.read(0.3)
+    s.stop()
+    contents = [m["content"] for m in sent_messages(calls)]
+    check("alerte si le verrou s'arrête sans mot de passe", any("terminal a été fermé" in c for c in contents), str(contents))
+    clear(calls)
+
+    # curl qui échoue : le verrou continue et l'erreur est gardée
+    s = Session(dict(env, FAKE_CURL_EXIT="22"))
+    s.read(0.3)
+    s.send("faux\r")
+    s.read(0.3)
+    s.send(PASSWORD + "\r")
+    check("envoi en échec : se déverrouille", s.wait() == 0)
+    s.stop()
+    sent_messages(calls)
+    errors = os.path.join(state, "vkeep", "notify-errors.log")
+    log = open(errors).read() if os.path.exists(errors) else ""
+    check("envoi en échec : erreur gardée", "erreur simulée" in log and "code 22" in log, log)
+    clear(calls)
+
+    # curl absent : le verrou fonctionne et le note
+    fresh = os.path.join(root, "notify-state-fresh")
+    s = Session(dict(env, PATH=camera, XDG_STATE_HOME=fresh))
+    s.read(0.3)
+    s.send(PASSWORD + "\r")
+    check("sans curl : se déverrouille", s.wait() == 0)
+    s.stop()
+    fresh_errors = os.path.join(fresh, "vkeep", "notify-errors.log")
+    check("sans curl : erreur gardée", "curl n'a pas pu être lancé" in open(fresh_errors).read())
+    mode = os.stat(fresh_errors).st_mode & 0o777
+    check("journal d'erreurs lisible par le seul propriétaire", mode == 0o600, oct(mode))
+
+    # Configuration douteuse : avertie avant de verrouiller
+    bad = write_config(root, "config-bad", "discord_webhook = http://exemple.org/hook\ncouleur = rouge\nn'importe quoi\n", 0o644)
+    s = Session(dict(env, XDG_CONFIG_HOME=bad))
+    s.read(0.3)
+    s.send(PASSWORD + "\r")
+    s.wait()
+    s.stop()
+    text = s.output.decode(errors="replace")
+    check("avertit d'une configuration lisible par tous", "chmod 600" in text, text[:400])
+    check("avertit d'un réglage inconnu", "réglage inconnu « couleur »" in text, text[:400])
+    check("avertit d'une ligne sans =", "il manque « = »" in text, text[:400])
+    check("refuse un webhook sans https", "https://" in text and sent_messages(calls, 0.5) == [], text[:400])
+
+    quoted = write_config(root, "config-quoted", f'discord_webhook = "{WEBHOOK}"\n')
+
+    # --test-notify
+    s = Session(dict(env, XDG_CONFIG_HOME=quoted), args=("--test-notify",))
+    code = s.wait()
+    s.stop()
+    messages = sent_messages(calls)
+    check("--test-notify envoie un message", code == 0 and len(messages) == 1 and "test" in messages[0]["content"]
+          and messages[0]["url"] == WEBHOOK and b"1049h" not in s.output, f"code={code} {messages}")
+    clear(calls)
+    s = Session(dict(env, FAKE_CURL_EXIT="22"), args=("--test-notify",))
+    code = s.wait()
+    s.stop()
+    check("--test-notify signale un échec", code == 1 and b"erreur simul" in s.output and b"code 22" in s.output,
+          f"code={code} {s.output!r}")
+    clear(calls)
+    s = Session(dict(env, PATH=camera), args=("--test-notify",))
+    check("--test-notify sans curl", s.wait() == 1 and b"curl" in s.output, repr(s.output))
+    s.stop()
+    s = Session(dict(env, XDG_CONFIG_HOME=os.path.join(root, "absent")), args=("--test-notify",))
+    check("--test-notify sans webhook explique quoi faire", s.wait() == 1 and b"discord_webhook =" in s.output,
+          repr(s.output))
+    s.stop()
+    s = Session(env, args=("--test-notify", "-a"))
+    check("--test-notify ne se combine pas avec -a", s.wait() == 2)
+    s.stop()
+
+
 def run_tests(env, root):
     run_photo_tests(env, root)
+    run_notify_tests(env, root)
     # Écran et mauvais mot de passe
     s = Session(env)
     screen = s.read(0.5).decode(errors="replace")
